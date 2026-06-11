@@ -32,6 +32,65 @@ function checkApiKey(req: express.Request, res: express.Response, next: express.
   next();
 }
 
+// Helper: Retries Gemini API calls with exponential backoff on transient errors (503/429)
+// and handles automatic fallback to highly reliable models ("gemini-flash-latest", "gemini-3.1-flash-lite")
+async function callGeminiWithRetryAndFallback(
+  params: {
+    contents: any;
+    config?: any;
+    model?: string;
+  },
+  maxRetries = 3
+): Promise<any> {
+  const primaryModel = params.model || "gemini-3.5-flash";
+  const fallbackModels = ["gemini-flash-latest", "gemini-3.1-flash-lite"];
+  const modelsToTry = [primaryModel, ...fallbackModels];
+
+  for (const model of modelsToTry) {
+    let delay = 1000; // start with 1000ms delay
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[Gemini SDK] Action: Generating content with model=${model} (Attempt ${attempt}/${maxRetries})`);
+        const response = await ai.models.generateContent({
+          model: model,
+          contents: params.contents,
+          config: params.config,
+        });
+        return response;
+      } catch (error: any) {
+        const errStr = String(error?.message || error).toLowerCase();
+        const errStatus = error?.status || error?.statusCode;
+
+        // Detect transient outages, overloaded error codes, or rate limit threshold reach
+        const isTransient =
+          errStatus === 503 ||
+          errStatus === 429 ||
+          errStr.includes("503") ||
+          errStr.includes("429") ||
+          errStr.includes("unavailable") ||
+          errStr.includes("high demand") ||
+          errStr.includes("rate limit") ||
+          errStr.includes("exhausted") ||
+          errStr.includes("overloaded");
+
+        if (isTransient && attempt < maxRetries) {
+          console.warn(`[Gemini SDK] Transient error with model=${model} (Attempt ${attempt}). Retrying in ${delay}ms... Details: ${error.message || error}`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          delay *= 2; // exponential delay increase
+        } else {
+          console.error(`[Gemini SDK] Failed on model=${model} with error:`, error.message || error);
+          if (model === modelsToTry[modelsToTry.length - 1]) {
+            // Re-throw if this was our very last fallback model
+            throw error;
+          }
+          // Move onto the next fallback model in line
+          break;
+        }
+      }
+    }
+  }
+}
+
 /**
  * Endpoint: /api/recommendations
  * Purpose: Generates personalized occassion-based recommendations using Gemini 3.5 Flash
@@ -53,7 +112,7 @@ Structure the response as a valid, pure JSON object matching the provided schema
 
 Identify exactly three distinct look variations (e.g., "The Statement", "Effortless Elegance", "Bold Experimental"). Provide color suggestions, aesthetic analysis, and footwear options.`;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithRetryAndFallback({
       model: "gemini-3.5-flash",
       contents: userPrompt,
       config: {
@@ -137,7 +196,7 @@ If the user currently has clothes selected, acknowledge them in a natural, exper
 Recommend changes to fitting, size, or lighting virtual modes if applicable.
 Always be positive, confidence-boosting, and professional. Avoid lengthy greeting summaries. Go straight to styling options and tips.`;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithRetryAndFallback({
       model: "gemini-3.5-flash",
       contents: chatContents,
       config: {
@@ -175,7 +234,7 @@ ${customImage ? "- [User uploaded their own portrait image for this virtual fit]
 
 Generate a tailored Fashion Report Card!`;
 
-    const response = await ai.models.generateContent({
+    const response = await callGeminiWithRetryAndFallback({
       model: "gemini-3.5-flash",
       contents: instructions,
       config: {
