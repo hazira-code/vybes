@@ -18,6 +18,7 @@ interface GarmentSvgProps {
   colorHex: string;
   fitting: FittingType;
   modelId?: string; // Links dynamic contouring to the model
+  maskId?: string; // Optional dynamic silhouette mask ID received from parent
   className?: string;
   style?: React.CSSProperties;
 }
@@ -63,12 +64,89 @@ const GARMENT_PATHS: Record<string, string[]> = {
   ],
 };
 
+// Model silhouette boundaries for realistic fitting and masking
+const MODEL_SILHOUETTES: Record<string, { top: string; bottom: string }> = {
+  "model-sophia": {
+    top: 
+      "M31 10 C42 12, 58 12, 69 10 " + 
+      "C78 12, 85 18, 93 28 " +       
+      "L97 45 L83 50 " +               
+      "C79 65, 77 82, 82 110 " +       
+      "L18 110 " +                     
+      "C23 82, 21 65, 17 50 " +        
+      "L3 45 L7 28 " +                 
+      "C15 18, 22 12, 31 10 Z",        
+    bottom:
+      "M25 5 L75 5 " +                 
+      "C79 18, 83 40, 81 60 " +        
+      "L80 130 L52 130 " +             
+      "L50 51 " +                      
+      "L48 130 L20 130 " +             
+      "C17 40, 21 18, 25 5 Z"          
+  },
+  "model-marcus": {
+    top:
+      "M32 12 C42 13, 58 13, 68 12 " + 
+      "C80 13, 89 16, 97 22 " +       
+      "L99 44 L81 48 " +               
+      "C79 66, 78 86, 80 110 " +       
+      "L20 110 " +                     
+      "C22 86, 21 66, 19 48 " +        
+      "L1 44 L3 22 " +                 
+      "C11 16, 20 13, 32 12 Z",        
+    bottom:
+      "M23 6 L77 6 " +                 
+      "C82 18, 85 42, 83 62 " +        
+      "L82 130 L53 130 " +             
+      "L50 53 " +                      
+      "L47 130 L18 130 " +             
+      "C15 42, 18 18, 23 6 Z"          
+  },
+  "model-aria": {
+    top:
+      "M31 12 C41 15, 59 15, 69 12 " + 
+      "C77 14, 84 19, 91 26 " +       
+      "L94 48 L80 50 " +               
+      "C77 68, 77 86, 79 110 " +       
+      "L21 110 " +                     
+      "C23 86, 23 68, 20 50 " +        
+      "L6 48 L9 26 " +                 
+      "C16 19, 23 14, 31 12 Z",        
+    bottom:
+      "M26 8 L74 8 " +                 
+      "C78 20, 81 44, 79 64 " +        
+      "L79 130 L51 130 " +             
+      "L50 50 " +                      
+      "L49 130 L21 130 " +             
+      "C19 44, 22 20, 26 8 Z"          
+  },
+  "model-rohan": {
+    top:
+      "M32 11 C42 11, 58 11, 68 11 " + 
+      "C78 12, 86 15, 93 20 " +       
+      "L96 42 L80 44 " +               
+      "C77 64, 76 84, 78 110 " +       
+      "L22 110 " +                     
+      "C24 84, 23 64, 20 44 " +        
+      "L4 42 L7 20 " +                 
+      "C14 15, 22 12, 32 11 Z",        
+    bottom:
+      "M25 6 L75 6 " +                 
+      "C80 18, 82 40, 80 60 " +        
+      "L79 130 L52 130 " +             
+      "L50 49 " +                      
+      "L48 130 L21 130 " +             
+      "C18 40, 20 18, 25 6 Z"          
+  }
+};
+
 export const GarmentSvg: React.FC<GarmentSvgProps> = ({
   type,
   svgType,
   colorHex,
   fitting,
   modelId,
+  maskId,
   className = "",
   style = {},
 }) => {
@@ -100,6 +178,25 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
   const highlightedColor = "rgba(255,255,255,0.15)";
 
   const activeClipPathId = `clip-${svgType}-${type}`;
+
+  const isPresetModel = !!modelId && modelId !== "custom";
+  const modelKey = modelId && MODEL_SILHOUETTES[modelId] ? modelId : "model-sophia";
+  const modelSilhouetteData = MODEL_SILHOUETTES[modelKey];
+  const activeSilhouettePath = type === "top" ? modelSilhouetteData.top : modelSilhouetteData.bottom;
+  const modelMaskId = `silhouette-mask-${type}-${svgType}-${modelKey}`;
+
+  // Dynamically resolve the active silhouette mask ID
+  const activeMaskId = maskId || (isPresetModel ? modelMaskId : undefined);
+
+  // CSS mask-image and browser-prefixed parameters for pristine silhouette bounds clipping
+  const maskStyles: React.CSSProperties = activeMaskId
+    ? {
+        maskImage: `url(#${activeMaskId})`,
+        WebkitMaskImage: `url(#${activeMaskId})`,
+        mask: `url(#${activeMaskId})`,
+        WebkitMask: `url(#${activeMaskId})`,
+      }
+    : {};
 
   const renderContourOverlay = () => {
     const activeModelId = modelId || "model-sophia";
@@ -233,6 +330,7 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
       style={{
         transform: transformStr,
         transformOrigin: "center center",
+        ...maskStyles,
         ...style,
       }}
     >
@@ -249,6 +347,25 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
               <path key={idx} d={pathD} />
             ))}
           </clipPath>
+
+          {/* Model edge-shading gradient to dynamically blend edges with 3D wrap effects */}
+          <linearGradient id="silhouette-mask-gradient" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#444444" />
+            <stop offset="3%" stopColor="#888888" />
+            <stop offset="9%" stopColor="#ffffff" />
+            <stop offset="91%" stopColor="#ffffff" />
+            <stop offset="97%" stopColor="#888888" />
+            <stop offset="100%" stopColor="#444444" />
+          </linearGradient>
+
+          {isPresetModel && (
+            <mask id={modelMaskId}>
+              {/* White silhouette matches shape of the selected model exactly */}
+              <path d={activeSilhouettePath} fill="#ffffff" />
+              {/* Multiply shading to softly draw in fabric wrapping at horizons */}
+              <path d={activeSilhouettePath} fill="url(#silhouette-mask-gradient)" style={{ mixBlendMode: 'multiply' }} />
+            </mask>
+          )}
 
           {/* Subtle cylindrical 3D highlight running vertically down the body */}
           <linearGradient id="body-3d-cylindrical" x1="0" y1="0" x2="1" y2="0">
@@ -330,6 +447,9 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
             <stop offset="100%" stopColor="#000000" stopOpacity="0.20" />
           </linearGradient>
         </defs>
+
+        {/* Master model silhouette rendering group */}
+        <g mask={isPresetModel ? `url(#${modelMaskId})` : undefined}>
 
         {/* --- TOPS --- */}
         {svgType === "tee" && (
@@ -708,6 +828,7 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
             <rect x="48" y="10" width="4" height="6" rx="0.5" fill="#94a3b8" stroke={strokeColor} strokeWidth="0.5" />
           </g>
         )}
+        </g>
 
         {/* --- MODEL-SPECIFIC 3D CONTOUR SHADING OVERLAY MESH --- */}
         {renderContourOverlay()}
