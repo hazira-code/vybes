@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Sparkles,
   Camera,
@@ -30,6 +30,10 @@ import {
   PartyPopper,
   X,
   HelpCircle,
+  Share2,
+  Link2,
+  Download,
+  Check,
 } from "lucide-react";
 import { PRESET_MODELS, GARMENTS, LIGHTING_ENVIRONMENTS } from "./data";
 import { GarmentSvg } from "./components/GarmentSvg";
@@ -70,7 +74,17 @@ export default function App() {
   // Custom User Photo / Webcam upload
   const [customModelImage, setCustomModelImage] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Arena Debugging and MediaStream Diagnostics State
+  const [isDebugOpen, setIsDebugOpen] = useState(false);
+  const [availableDevices, setAvailableDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+  const [resolutionPreset, setResolutionPreset] = useState<"standard" | "low" | "hd">("standard");
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+  const [debugLogs, setDebugLogs] = useState<{ time: string; type: "info" | "success" | "warning" | "error"; msg: string }[]>([]);
 
   // Manual overlay adjustments for custom uploads
   const [customTopX, setCustomTopX] = useState<number>(30);
@@ -85,8 +99,16 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<"tops" | "bottoms">("tops");
 
+  // Hovered history item state for high fidelity tooltip preview
+  const [hoveredHistoryItem, setHoveredHistoryItem] = useState<any | null>(null);
+  const [hoveredHistoryRect, setHoveredHistoryRect] = useState<DOMRect | null>(null);
+
   // Saved combinations for Comparison Engine
   const [comparedOutfits, setComparedOutfits] = useState<SavedOutfit[]>([]);
+
+  // Outfit selected for Sharing Dialog Modal
+  const [sharingOutfit, setSharingOutfit] = useState<SavedOutfit | null>(null);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   // AI Chat and Assistant State
   const [chatMessages, setChatMessages] = useState<{ role: "user" | "model"; text: string }[]>([
@@ -175,6 +197,223 @@ export default function App() {
     setComparedOutfits(initialCompare);
   }, []);
 
+  // Parse deep-linked shared outfit on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sharedData = params.get("share");
+    if (sharedData) {
+      try {
+        const decoded = JSON.parse(decodeURIComponent(atob(sharedData)));
+        const outfitName = decoded.n || "Shared Style";
+        const modelId = decoded.m || "model-sophia";
+        const modelName = PRESET_MODELS.find((m) => m.id === modelId)?.name || "Sophia";
+        const topId = decoded.t || "";
+        const topColor = decoded.tc || "";
+        const topColorHex = decoded.th || "";
+        const bottomId = decoded.b || "";
+        const bottomColor = decoded.bc || "";
+        const bottomColorHex = decoded.bh || "";
+        const lighting = decoded.l || "daylight";
+        const size = decoded.s || "M";
+        const fitting = decoded.f || "regular";
+        const material = decoded.mat || "cotton";
+
+        const sharedOutfit: SavedOutfit = {
+          id: `shared-${Date.now()}`,
+          name: outfitName,
+          modelId,
+          modelName,
+          topId,
+          topColor,
+          topColorHex,
+          bottomId,
+          bottomColor,
+          bottomColorHex,
+          lighting,
+          size,
+          fitting,
+          material,
+          savedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        };
+
+        // Add to compared outfits list and select it
+        setComparedOutfits((prev) => {
+          if (prev.some((o) => o.topId === topId && o.bottomId === bottomId && o.fitting === fitting)) {
+            return prev;
+          }
+          return [sharedOutfit, ...prev];
+        });
+
+        // Set state to load shared configuration immediately
+        setSelectedModelId(modelId);
+        setLighting(lighting);
+        setSize(size);
+        setFitting(fitting);
+        setMaterial(material);
+
+        if (topId) {
+          const topGarment = GARMENTS.find((g) => g.id === topId);
+          if (topGarment) {
+            setCurrentTop(topGarment);
+            setCurrentTopColor({ name: topColor, hex: topColorHex });
+          }
+        } else {
+          setCurrentTop(null);
+        }
+        if (bottomId) {
+          const bottomGarment = GARMENTS.find((g) => g.id === bottomId);
+          if (bottomGarment) {
+            setCurrentBottom(bottomGarment);
+            setCurrentBottomColor({ name: bottomColor, hex: bottomColorHex });
+          }
+        } else {
+          setCurrentBottom(null);
+        }
+        
+        // Timeout to show loader or Toast
+        setTimeout(() => {
+          showToast(`Loaded deep-linked look: "${outfitName}"!`);
+        }, 300);
+      } catch (err) {
+        console.error("Failed to parse shared query", err);
+      }
+    }
+  }, []);
+
+  const generateShareLink = (outfit: SavedOutfit) => {
+    try {
+      const minified = {
+        n: outfit.name,
+        m: outfit.modelId,
+        t: outfit.topId,
+        tc: outfit.topColor,
+        th: outfit.topColorHex,
+        b: outfit.bottomId,
+        bc: outfit.bottomColor,
+        bh: outfit.bottomColorHex,
+        l: outfit.lighting,
+        s: outfit.size,
+        f: outfit.fitting,
+        mat: outfit.material || "cotton"
+      };
+      const base64 = btoa(encodeURIComponent(JSON.stringify(minified)));
+      return `${window.location.origin}${window.location.pathname}?share=${base64}`;
+    } catch (e) {
+      console.error("Failed to generate share link", e);
+      return window.location.href;
+    }
+  };
+
+  const copyShareLinkToClipboard = (outfit: SavedOutfit) => {
+    const link = generateShareLink(outfit);
+    navigator.clipboard.writeText(link)
+      .then(() => {
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 2000);
+      })
+      .catch((err) => {
+        console.error("Clipboard copy failed: ", err);
+        showToast("Failed to copy link. Please manually copy the URL.");
+      });
+  };
+
+  const downloadOutfitDesignPostcard = (outfit: SavedOutfit) => {
+    const matchingTop = GARMENTS.find((g) => g.id === outfit.topId);
+    const matchingBottom = GARMENTS.find((g) => g.id === outfit.bottomId);
+    
+    const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 600" width="600" height="600">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#070709" stroke-linecap="round" />
+      <stop offset="50%" stop-color="#0e0c15" />
+      <stop offset="100%" stop-color="#030305" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7C3AED" />
+      <stop offset="50%" stop-color="#F43F5E" />
+      <stop offset="100%" stop-color="#A855F7" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer frame background -->
+  <rect width="600" height="600" fill="url(#bgGrad)" rx="32" stroke="url(#borderGrad)" stroke-width="2.5" />
+  
+  <!-- Grid -->
+  <g opacity="0.06">
+    <path d="M 0,50 L 600,50 M 0,100 L 600,100 M 0,150 L 600,150 M 0,200 L 600,200 M 0,250 L 600,250 M 0,300 L 600,300 M 0,350 L 600,350 M 0,400 L 600,400 M 0,450 L 600,450 M 0,500 L 600,500 M 0,550 L 600,550" stroke="#9F66FF" stroke-width="1" />
+    <path d="M 50,0 L 50,600 M 100,0 L 100,600 M 150,0 L 150,600 M 200,0 L 200,600 M 250,0 L 250,600 M 300,0 L 300,600 M 350,0 L 350,600 M 400,0 L 400,600 M 450,0 L 450,600 M 500,0 L 500,600 M 550,0 L 550,600" stroke="#9F66FF" stroke-width="1" />
+  </g>
+
+  <!-- Title & Branding -->
+  <text x="300" y="55" fill="#A855F7" font-family="'Inter', system-ui, sans-serif" font-size="11" font-weight="900" letter-spacing="6" text-anchor="middle" opacity="0.8">V Y B E S  ·  F A S H I O N  T E C H</text>
+  <text x="300" y="85" fill="#FFFFFF" font-family="'Inter', system-ui, sans-serif" font-size="24" font-weight="800" letter-spacing="2" text-anchor="middle">ARENA OUTFIT POSTCARD</text>
+  <line x1="180" y1="105" x2="420" y2="105" stroke="url(#borderGrad)" stroke-width="1.5" opacity="0.6" />
+
+  <!-- Look Card Container background -->
+  <rect x="40" y="130" width="520" height="340" fill="#0c0a13" rx="24" stroke="#ffffff" stroke-opacity="0.06" stroke-width="1" />
+
+  <!-- Look Properties Left Hand Side -->
+  <g transform="translate(70, 175)">
+    <text x="0" y="0" fill="#a855f7" font-family="'Inter', sans-serif" font-size="10" font-weight="800" letter-spacing="1.5">OUTFIT PROFILE</text>
+    <text x="0" y="28" fill="#ffffff" font-family="'Inter', sans-serif" font-size="18" font-weight="700">${outfit.name}</text>
+    
+    <text x="0" y="70" fill="#64748b" font-family="'Inter', sans-serif" font-size="11" font-weight="500">Try-On Model:</text>
+    <text x="110" y="70" fill="#cbd5e1" font-family="'Inter', sans-serif" font-size="11" font-weight="700">${outfit.modelName || 'Sophia'}</text>
+
+    <text x="0" y="95" fill="#64748b" font-family="'Inter', sans-serif" font-size="11" font-weight="500">Garment Size:</text>
+    <text x="110" y="95" fill="#e2e8f0" font-family="'Inter', sans-serif" font-size="11" font-weight="700">${outfit.size}</text>
+
+    <text x="0" y="120" fill="#64748b" font-family="'Inter', sans-serif" font-size="11" font-weight="500">Fitting Contour:</text>
+    <text x="110" y="120" fill="#e2e8f0" font-family="'Inter', sans-serif" font-size="11" font-weight="700" text-transform="uppercase">${outfit.fitting}</text>
+
+    <text x="0" y="145" fill="#64748b" font-family="'Inter', sans-serif" font-size="11" font-weight="500">Fabric Material:</text>
+    <text x="110" y="145" fill="#e2e8f0" font-family="'Inter', sans-serif" font-size="11" font-weight="700" text-transform="capitalize">${outfit.material || 'Premium Cotton'}</text>
+
+    <text x="0" y="170" fill="#64748b" font-family="'Inter', sans-serif" font-size="11" font-weight="500">Studio Lighting:</text>
+    <text x="110" y="170" fill="#fbbf24" font-family="'Inter', sans-serif" font-size="11" font-weight="700" text-transform="capitalize">${outfit.lighting}</text>
+  </g>
+
+  <!-- Look Swatches Right Hand Side -->
+  <g transform="translate(350, 175)">
+    <!-- Top Garment Swatch -->
+    <text x="0" y="0" fill="#a855f7" font-family="'Inter', sans-serif" font-size="10" font-weight="800" letter-spacing="1.5">GARMENT DETAILS</text>
+    
+    <!-- Top info -->
+    <circle cx="20" cy="35" r="14" fill="${outfit.topColorHex || '#ffffff'}" stroke="#ffffff" stroke-opacity="0.1" stroke-width="2" />
+    <text x="45" y="32" fill="#ffffff" font-family="'Inter', sans-serif" font-size="11" font-weight="700">${matchingTop ? matchingTop.name : 'Bare Top'}</text>
+    <text x="45" y="46" fill="#94a3b8" font-family="'Inter', sans-serif" font-size="9">${outfit.topColor ? `${outfit.topColor} (${outfit.topColorHex})` : 'N/A'}</text>
+
+    <!-- Bottom info -->
+    <circle cx="20" cy="95" r="14" fill="${outfit.bottomColorHex || '#ffffff'}" stroke="#ffffff" stroke-opacity="0.1" stroke-width="2" />
+    <text x="45" y="92" fill="#ffffff" font-family="'Inter', sans-serif" font-size="11" font-weight="700">${matchingBottom ? matchingBottom.name : 'Bare Bottom'}</text>
+    <text x="45" y="106" fill="#94a3b8" font-family="'Inter', sans-serif" font-size="9">${outfit.bottomColor ? `${outfit.bottomColor} (${outfit.bottomColorHex})` : 'N/A'}</text>
+    
+    <!-- Combined estimation price badge -->
+    <g transform="translate(0, 137)">
+      <rect x="0" y="0" width="180" height="36" fill="#181424" rx="10" stroke="#8b5cf6" stroke-opacity="0.2" stroke-width="1" />
+      <text x="12" y="21" fill="#cbd5e1" font-family="'Inter', sans-serif" font-size="9" font-weight="500">Combined Value:</text>
+      <text x="168" y="22" fill="#fb7185" font-family="'Inter', sans-serif" font-size="11" font-weight="800" text-anchor="end">$${((matchingTop?.price || 0) + (matchingBottom?.price || 0))}</text>
+    </g>
+  </g>
+
+  <!-- Stamp watermark footer decoration -->
+  <rect x="40" y="495" width="520" height="65" fill="#000000" fill-opacity="0.2" rx="16" />
+  <text x="60" y="533" fill="#64748b" font-family="'Inter', sans-serif" font-size="9" font-weight="500">DIGITAL FIT VERDICT &amp; CRYPTOSTAMP</text>
+  <text x="540" y="533" fill="#7C3AED" font-family="'Inter', sans-serif" font-size="9" font-weight="800" text-anchor="end" letter-spacing="1">VERIFIED_FIT_${outfit.id.substring(0, 8).toUpperCase()}</text>
+</svg>`;
+
+    const blob = new Blob([svgContent], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `vybes-outfit-${outfit.id}.svg`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast(`Styling Postcard compiled & downloaded successfully as SVG!`);
+  };
+
   // Track the last 5 outfit configurations tried on dynamically
   useEffect(() => {
     if (!currentTop && !currentBottom) return;
@@ -237,6 +476,36 @@ export default function App() {
 
   // --- ACTIONS ---
 
+  // Debug Log helper
+  const addDebugLog = useCallback((msg: string, type: "info" | "success" | "warning" | "error" = "info") => {
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    setDebugLogs((prev) => [{ time: timestamp, type, msg }, ...prev].slice(0, 40));
+    console.log(`[Arena Debug: ${type.toUpperCase()}] ${msg}`);
+  }, []);
+
+  // Enumerating devices
+  const refreshDevices = useCallback(async () => {
+    addDebugLog("Enumerating media devices...", "info");
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      addDebugLog("Webcam enumeration API not supported (navigator.mediaDevices.enumerateDevices is missing). Insecure context?", "error");
+      return;
+    }
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoDevices = devices.filter((d) => d.kind === "videoinput");
+      setAvailableDevices(videoDevices);
+      addDebugLog(`Found ${videoDevices.length} video input sources.`, "success");
+      videoDevices.forEach((d, idx) => {
+        addDebugLog(`Device #${idx + 1}: "${d.label || "Unnamed Camera"}" ID: ${d.deviceId ? d.deviceId.slice(0, 10) + "..." : "Empty"}`, "info");
+      });
+      if (videoDevices.length > 0 && !selectedDeviceId) {
+        setSelectedDeviceId(videoDevices[0].deviceId);
+      }
+    } catch (err: any) {
+      addDebugLog(`Failed to enumerate devices: ${err.message || err}`, "error");
+    }
+  }, [selectedDeviceId, addDebugLog]);
+
   // Handle Model Selection
   const handleModelChange = (modelId: string) => {
     setSelectedModelId(modelId);
@@ -245,32 +514,157 @@ export default function App() {
     }
   };
 
+  // Callback ref to bind the webcam stream immediately as soon as the <video> element mounts
+  const videoRefCallback = useCallback((node: HTMLVideoElement | null) => {
+    videoRef.current = node;
+    if (node) {
+      addDebugLog("Video element ref bound inside Fitting Arena DOM.", "info");
+      if (cameraStream) {
+        addDebugLog("Updating video element srcObject with active MediaStream...", "info");
+        node.srcObject = cameraStream;
+        node.play()
+          .then(() => {
+            addDebugLog(`Video play success. Dimensions: ${node.videoWidth}x${node.videoHeight}`, "success");
+          })
+          .catch((err) => {
+            console.error("Failed to auto-play video stream on element mount:", err);
+            addDebugLog(`Playback auto-play failed: ${err.message || err}`, "error");
+            setCameraError("Failed to initialize video playback stream. Please try restarting your camera.");
+          });
+      }
+    }
+  }, [cameraStream, addDebugLog]);
+
+  // Runs early diagnostics on mount/setup changes
+  useEffect(() => {
+    addDebugLog("System Diagnostics Initialized.", "info");
+    addDebugLog(`Security Context: ${window.isSecureContext ? "Secure (HTTPS/Localhost)" : "Insecure (Webcam blocked by browser!)"}`, window.isSecureContext ? "success" : "error");
+    addDebugLog(`MediaDevices Support: ${!!navigator.mediaDevices ? "Ready" : "Unavailable (Insecure context or outdated browser)"}`, !!navigator.mediaDevices ? "success" : "error");
+    addDebugLog(`Host Page Origin: ${window.location.origin}`, "info");
+    addDebugLog(`Rendering in Sandbox/Iframe: ${window.self !== window.top ? "Yes (Iframe restrictions may apply)" : "No (Top level)"}`, "info");
+
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "camera" as any })
+        .then((status) => {
+          addDebugLog(`Permissions API camera query status: "${status.state}"`, status.state === "granted" ? "success" : status.state === "denied" ? "error" : "warning");
+          status.onchange = () => {
+            addDebugLog(`Browser camera permission updated dynamically to: "${status.state}"`, status.state === "granted" ? "success" : status.state === "denied" ? "error" : "warning");
+          };
+        })
+        .catch((err) => {
+          addDebugLog(`Permissions query not queryable: ${err.message || err}`, "info");
+        });
+    }
+
+    refreshDevices();
+  }, [refreshDevices, addDebugLog]);
+
+  // Clean up camera stream tracks when the component is unmounted
+  useEffect(() => {
+    return () => {
+      if (cameraStream) {
+        addDebugLog("Unmounting component: stopping active webcam stream.", "info");
+        cameraStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, [cameraStream, addDebugLog]);
+
   // Interactive Live Camera capturing
   const startCamera = async () => {
     setIsCameraActive(true);
+    setCameraError(null);
     setSelectedModelId("custom");
+    addDebugLog("Initiating getUserMedia camera requests...", "info");
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 500, height: 600, facingMode: "user" },
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+      if (cameraStream) {
+        addDebugLog("Stopping existing active MediaStream track objects...", "info");
+        cameraStream.getTracks().forEach((track) => track.stop());
       }
-    } catch (err) {
+
+      // Configure dynamic customized viewport constraints
+      let widthVal = 500;
+      let heightVal = 600;
+      if (resolutionPreset === "low") {
+        widthVal = 320;
+        heightVal = 240;
+      } else if (resolutionPreset === "hd") {
+        widthVal = 1280;
+        heightVal = 720;
+      }
+
+      const constraints: MediaStreamConstraints = {
+        video: {
+          facingMode: facingMode,
+          ...(selectedDeviceId ? { deviceId: { exact: selectedDeviceId } } : {}),
+          width: { ideal: widthVal },
+          height: { ideal: heightVal },
+        }
+      };
+
+      addDebugLog(`Request constraints: ${JSON.stringify(constraints.video)}`, "info");
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      setCameraStream(stream);
+      addDebugLog("Webcam Access Granted by User!", "success");
+
+      // Log details of each active track
+      stream.getVideoTracks().forEach((track, idx) => {
+        addDebugLog(`Track #${idx + 1}: ${track.label} (Enabled: ${track.enabled}, ReadyState: ${track.readyState})`, "success");
+        try {
+          const settings = track.getSettings();
+          addDebugLog(`Track Settings: Aspect: ${settings.aspectRatio}, FPS: ${settings.frameRate}, Resolution: ${settings.width}x${settings.height}`, "info");
+        } catch (settingsErr) {
+          // ignore
+        }
+      });
+
+      showToast("Access granted! Live mirror feed initializing now.");
+    } catch (err: any) {
       console.error("Camera access failed", err);
-      showToast("Webcam access restricted or not available. Reverting to photo upload.");
+      let errorMsg = "Webcam access failed.";
+      if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+        errorMsg = "Camera permission denied. Please click the camera indicator or lock icon in your address bar to allow permissions.";
+        addDebugLog("Error: Permission denied by user or browser policy.", "error");
+      } else if (err.name === "NotFoundError" || err.name === "DevicesNotFoundError") {
+        errorMsg = "No webcam device detected. Please plug in or enable a camera and try again.";
+        addDebugLog("Error: Media devices not found, plug in a camera.", "error");
+      } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
+        errorMsg = "Hardware camera is already being used by another tab or program. Please close other camera programs.";
+        addDebugLog("Error: Source device already locked or busy by hardware/software.", "error");
+      } else if (err.name === "OverconstrainedError") {
+        errorMsg = "The requested constraints (width/height/facingMode) are not supported by your camera hardware. Adjust diagnostics constraints.";
+        addDebugLog(`Error: Overconstrained: ${err.constraint || "unknown constraint"}`, "error");
+      } else if (err.name === "SecurityError") {
+        errorMsg = "Blocked by iframe sandbox rules. Click 'Open in New Tab' to bypass security limits and grant camera access.";
+        addDebugLog("Error: Iframe sandbox restriction (no camera feature policy allowed).", "error");
+      } else {
+        errorMsg = `Could not access camera (${err.message || err.name}). Please use manual portrait upload instead.`;
+        addDebugLog(`Error: ${err.name} - ${err.message}`, "error");
+      }
+      setCameraError(errorMsg);
+      showToast(errorMsg);
       setIsCameraActive(false);
+      setCameraStream(null);
     }
   };
 
   const stopCamera = () => {
+    addDebugLog("Deactivating webcam and cleaning stream tracks...", "info");
+    if (cameraStream) {
+      cameraStream.getTracks().forEach((track) => {
+        track.stop();
+        addDebugLog(`Stopped track: ${track.label}`, "info");
+      });
+      setCameraStream(null);
+    }
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
+    addDebugLog("Camera successfully powered down.", "info");
   };
 
   const captureWebcamSnapshot = () => {
@@ -287,6 +681,8 @@ export default function App() {
         showToast("Selfie loaded into canvas dressing lounge! Align garments with sliders.");
         setShowAdjustControls(true);
       }
+    } else {
+      showToast("Camera feed is not ready yet. Please wait for the video stream.");
     }
   };
 
@@ -546,6 +942,18 @@ export default function App() {
     showToast(`Restored previous outfit from history!`);
   };
 
+  // Hover handlers for the history items preview tooltip
+  const handleHistoryMouseEnter = (e: React.MouseEvent<HTMLButtonElement>, item: any) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoveredHistoryRect(rect);
+    setHoveredHistoryItem(item);
+  };
+
+  const handleHistoryMouseLeave = () => {
+    setHoveredHistoryItem(null);
+    setHoveredHistoryRect(null);
+  };
+
   // Dynamic values computation
   const totalPrice = (currentTop?.price || 0) + (currentBottom?.price || 0);
   const lightingEnv = LIGHTING_ENVIRONMENTS[lighting];
@@ -618,14 +1026,32 @@ export default function App() {
             {/* Ambient Lighting Gradient Overlay layer */}
             <div className={`absolute inset-0 transition-opacity duration-700 pointer-events-none opacity-40 mix-blend-color-dodge ${lightingEnv.bgClass}`} />
 
-            <div className="flex items-center justify-between z-10">
+            <div className="flex items-center justify-between z-10 animate-fade-in">
               <div className="flex items-center gap-2">
                 <ScanFace className="w-5 h-5 text-[#A855F7]" />
                 <h3 className="font-semibold text-slate-200 tracking-wider font-sans uppercase text-[13px]">Fitting Arena</h3>
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] bg-black/60 px-3 py-1 rounded-xl border border-white/5 text-slate-400">
-                <Sun className={`w-3.5 h-3.5 ${lightingEnv.accentColor}`} />
-                <span className="font-mono uppercase tracking-wide">{lightingEnv.name}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsDebugOpen(!isDebugOpen);
+                    refreshDevices();
+                  }}
+                  className={`flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-xl border font-bold uppercase tracking-wider transition-all duration-200 ${
+                    isDebugOpen
+                      ? "bg-[#EF4444]/15 border-[#EF4444]/40 text-[#F87171] shadow-[0_0_8px_rgba(239,68,68,0.15)]"
+                      : "bg-[#7C3AED]/10 border-[#7C3AED]/20 text-[#A855F7] hover:bg-[#7C3AED]/20 hover:border-[#7C3AED]/40"
+                  }`}
+                  title="Open live camera setup options and MediaStream track diagnostics tools"
+                >
+                  <Cpu className="w-3.5 h-3.5 animate-pulse" />
+                  {isDebugOpen ? "Close Debug" : "Arena Debug"}
+                </button>
+                <div className="flex items-center gap-1.5 text-[10px] bg-black/60 px-3 py-1 rounded-xl border border-white/5 text-slate-400">
+                  <Sun className={`w-3.5 h-3.5 ${lightingEnv.accentColor}`} />
+                  <span className="font-mono uppercase tracking-wide">{lightingEnv.name}</span>
+                </div>
               </div>
             </div>
 
@@ -658,7 +1084,7 @@ export default function App() {
                   <div className="absolute inset-0 z-30 bg-black flex flex-col justify-between p-4">
                     <div className="absolute inset-0 flex items-center justify-center overflow-hidden">
                       <video
-                        ref={videoRef}
+                        ref={videoRefCallback}
                         className="w-full h-full object-cover rounded-2xl"
                         playsInline
                         muted
@@ -707,6 +1133,17 @@ export default function App() {
                       <p className="text-[11px] text-slate-500 max-w-xs mb-5 leading-relaxed font-light">
                         Upload your personal high-res portrait or initiate your live camera viewport to preview the luxury drapes dynamically.
                       </p>
+
+                      {/* Display helpful camera permission/sandbox block diagnostics in real-time */}
+                      {cameraError && (
+                        <div className="mb-4 p-3.5 bg-red-950/30 border border-red-500/20 rounded-xl text-left max-w-xs flex flex-col gap-1 shadow-md">
+                          <span className="text-[10px] text-red-400 font-bold uppercase tracking-wider">Access Restrained</span>
+                          <p className="text-[10px] text-slate-400 font-sans leading-normal">
+                            {cameraError}
+                          </p>
+                        </div>
+                      )}
+
                       <div className="flex flex-col gap-2 w-full max-w-xs">
                         <label className="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/5 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5 transition-all active:scale-95">
                           <Upload className="w-4 h-4 text-[#A855F7]" />
@@ -863,6 +1300,210 @@ export default function App() {
                 )}
               </div>
 
+              {/* ====== ARENA DIAGNOSTICS & DEBUGGING OVERLAY (z-[45]) ====== */}
+              {isDebugOpen && (
+                <div className="absolute inset-0 z-[45] bg-slate-950/95 backdrop-blur-md p-4 flex flex-col gap-3 overflow-y-auto text-slate-200 font-sans select-none scrollbar-thin">
+                  {/* Overlay Header */}
+                  <div className="flex items-center justify-between border-b border-white/10 pb-2 shrink-0">
+                    <div className="flex items-center gap-1.5">
+                      <Cpu className="w-4 h-4 text-purple-400 animate-spin" style={{ animationDuration: '4s' }} />
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-purple-200 font-mono">Arena Diagnostics</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsDebugOpen(false)}
+                      className="p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Environment Status Checks */}
+                  <div className="grid grid-cols-2 gap-2 text-[10px] font-mono leading-relaxed bg-black/30 p-2.5 rounded-xl border border-white/5 shrink-0">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-slate-500">Secure Origin (HTTPS):</span>
+                      <span className={`font-bold ${window.isSecureContext ? "text-emerald-400" : "text-amber-500"}`}>
+                        {window.isSecureContext ? "✓ ACTIVE" : "✗ INSECURE"}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-slate-500">Media API Support:</span>
+                      <span className={`font-bold ${!!navigator.mediaDevices ? "text-emerald-400" : "text-red-400"}`}>
+                        {!!navigator.mediaDevices ? "✓ SUPPORTED" : "✗ BLOCKED"}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 mt-1">
+                      <span className="text-slate-500">Iframe Context:</span>
+                      <span className="text-blue-400 font-bold">
+                        {window.self !== window.top ? "YES (SANDBOXED)" : "NO (NATIVE)"}
+                      </span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 mt-1">
+                      <span className="text-slate-500">Permission Status:</span>
+                      <span className="text-purple-400 font-bold capitalize">
+                        {cameraError ? "Restricted" : isCameraActive ? "Granted" : "Pending"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Webcam Constraints Adjustments */}
+                  <div className="flex flex-col gap-2 bg-[#0C0C0C]/80 p-3 rounded-xl border border-white/5 text-[11px] shrink-0">
+                    <span className="text-[9px] text-[#A855F7] font-bold font-mono tracking-wider uppercase">input customization & constraints</span>
+                    
+                    {/* Select active camera device */}
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[9px] text-slate-400 flex items-center justify-between">
+                        <span>Select Input Source:</span>
+                        <span className="text-purple-400 font-mono text-[8px]">({availableDevices.length} found)</span>
+                      </label>
+                      <select
+                        value={selectedDeviceId}
+                        onChange={(e) => {
+                          setSelectedDeviceId(e.target.value);
+                          addDebugLog(`Switched webcam device target: ${e.target.value}`, "info");
+                        }}
+                        className="bg-black border border-white/10 text-slate-200 text-[10px] rounded-lg p-1.5 focus:border-[#7C3AED] focus:outline-none w-full"
+                      >
+                        {availableDevices.length === 0 ? (
+                          <option value="">No cameras detected (re-scan below)</option>
+                        ) : (
+                          availableDevices.map((d, index) => (
+                            <option key={d.deviceId || index} value={d.deviceId}>
+                              {d.label || `Camera #${index + 1} (${d.deviceId ? d.deviceId.slice(0, 8) : "N/A"})`}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Facing Mode & Resolutions */}
+                    <div className="grid grid-cols-2 gap-2 mt-1">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[9px] text-slate-400">Facing Direction:</label>
+                        <select
+                          value={facingMode}
+                          onChange={(e) => {
+                            setFacingMode(e.target.value as any);
+                            addDebugLog(`Constraint updated - facingMode: ${e.target.value}`, "info");
+                          }}
+                          className="bg-black border border-white/10 text-slate-200 text-[10px] rounded-lg p-1 w-full"
+                        >
+                          <option value="user">User (Front-Facing)</option>
+                          <option value="environment">Environment (Rear)</option>
+                        </select>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[9px] text-slate-400">Resolution Aspect:</label>
+                        <select
+                          value={resolutionPreset}
+                          onChange={(e) => {
+                            setResolutionPreset(e.target.value as any);
+                            addDebugLog(`Constraint updated - resolution preset: ${e.target.value}`, "info");
+                          }}
+                          className="bg-black border border-white/10 text-slate-200 text-[10px] rounded-lg p-1 w-full"
+                        >
+                          <option value="standard">Standard (500 x 600)</option>
+                          <option value="low">Low Spec (320 x 240)</option>
+                          <option value="hd">High Def (1280 x 720)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Test Connect Button */}
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={startCamera}
+                        className="flex-1 py-2 px-3 bg-[#7C3AED] hover:bg-[#A855F7] text-white font-bold rounded-lg text-[10px] uppercase tracking-widest text-center transition active:scale-95 flex items-center justify-center gap-1 shadow-md shadow-[#7C3AED]/20"
+                      >
+                        <Camera className="w-3.5 h-3.5" /> Bind Feed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={stopCamera}
+                        className="py-2 px-3 bg-red-950/40 border border-red-500/30 hover:bg-red-900/30 text-red-200 font-bold rounded-lg text-[10px] uppercase tracking-widest text-center transition active:scale-95"
+                      >
+                        Disconnect
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Active MediaStream Track Status */}
+                  {cameraStream ? (
+                    <div className="bg-[#050B08] border border-emerald-500/20 rounded-xl p-2.5 text-[9px] font-mono leading-relaxed space-y-1 shrink-0">
+                      <div className="text-emerald-400 font-bold uppercase tracking-wider text-[8px] flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-ping" />
+                        MEDIASTREAM TRACKS LIVE:
+                      </div>
+                      <div>Stream ID: <span className="text-slate-300">{cameraStream.id}</span></div>
+                      {cameraStream.getVideoTracks().map((track, i) => (
+                        <div key={track.id || i} className="border-t border-emerald-500/10 pt-1 mt-1 space-y-0.5">
+                          <div className="truncate">Track: <span className="text-emerald-300 font-semibold">{track.label || "Default video input"}</span></div>
+                          <div className="flex items-center gap-3">
+                            <span>Ready: <span className="text-slate-300">{track.readyState}</span></span>
+                            <span>Enabled: <span className="text-slate-300">{track.enabled ? "Yes" : "No"}</span></span>
+                            <span>Muted: <span className={track.muted ? "text-amber-400 font-semibold" : "text-slate-300"}>{track.muted ? "Yes" : "No"}</span></span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="bg-slate-900/40 border border-white/5 rounded-xl p-2.5 text-center text-[10px] text-slate-500 italic shrink-0">
+                      No Active MediaStream bound. Click Bind Feed to test connection constraints.
+                    </div>
+                  )}
+
+                  {/* Terminal Log Console */}
+                  <div className="flex-1 flex flex-col gap-1 min-h-[140px] mt-1 overflow-hidden">
+                    <div className="flex items-center justify-between text-[9px] shrink-0 pb-1">
+                      <span className="text-[#A855F7] font-bold font-mono tracking-wider uppercase">Diagnostic Log Console</span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            refreshDevices();
+                            addDebugLog("Device re-scan triggered manually.", "info");
+                          }}
+                          className="hover:text-white text-slate-400 font-bold uppercase font-mono px-1 flex items-center gap-0.5 transition"
+                        >
+                          <RefreshCw className="w-2.5 h-2.5" /> Re-scan
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDebugLogs([])}
+                          className="hover:text-white text-red-400 font-bold uppercase font-mono px-1 transition"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 bg-black border border-white/5 rounded-xl p-2.5 font-mono text-[9px] overflow-y-auto flex flex-col gap-1.5 scrollbar-thin">
+                      {debugLogs.length === 0 ? (
+                        <span className="text-slate-600 italic">Diagnostic logs empty.</span>
+                      ) : (
+                        debugLogs.map((log, idx) => {
+                          const valCol =
+                            log.type === "success"
+                              ? "text-emerald-400"
+                              : log.type === "error"
+                              ? "text-red-400"
+                              : log.type === "warning"
+                              ? "text-amber-400"
+                              : "text-slate-400";
+                          return (
+                            <div key={idx} className="flex gap-2 leading-relaxed border-b border-white/5 pb-1 last:border-0">
+                              <span className="text-slate-600 shrink-0 font-medium">{log.time}</span>
+                              <span className={`${valCol} font-sans`}>{log.msg}</span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Dynamic Fit details badge watermark */}
               {selectedModelId !== "custom" && (
                 <div className="absolute bottom-4 left-4 bg-black/75 backdrop-blur-md px-3.5 py-2 rounded-xl border border-white/5 text-[10px] text-slate-400 z-35 flex flex-col gap-0.5">
@@ -943,13 +1584,15 @@ export default function App() {
                         key={item.id}
                         type="button"
                         onClick={() => restoreRecentConfig(item)}
+                        onMouseEnter={(e) => handleHistoryMouseEnter(e, item)}
+                        onMouseLeave={handleHistoryMouseLeave}
                         className={`group/item flex-shrink-0 w-[140px] text-left p-2.5 rounded-2xl border transition-all text-[11px] ${
                           isCurrentlyActive
                             ? "bg-[#7C3AED]/20 border-[#7C3AED]/60 shadow-md shadow-[#7C3AED]/5"
                             : "bg-black/30 hover:bg-black/65 border-white/5 hover:border-white/10"
                         }`}
                       >
-                        <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center justify-between mb-1.5 font-sans">
                           <span className={`text-[9px] font-mono font-bold tracking-wider uppercase ${isCurrentlyActive ? "text-[#A855F7]" : "text-slate-400"}`}>
                             #{idx + 1}
                           </span>
@@ -981,6 +1624,166 @@ export default function App() {
                       </button>
                     );
                   })}
+                </div>
+              )}
+
+              {/* ====== HIGH-FIDELITY OUTFIT HOVER PREVIEW TOOLTIP ====== */}
+              {hoveredHistoryItem && hoveredHistoryRect && (
+                <div
+                  className="fixed z-[100] p-3.5 bg-slate-950/95 border border-purple-500/30 rounded-2xl shadow-[0_12px_45px_rgba(0,0,0,0.92)] max-w-sm pointer-events-none backdrop-blur-md animate-fade-in flex gap-3 text-slate-200"
+                  style={{
+                    left: `${hoveredHistoryRect.left + hoveredHistoryRect.width / 2}px`,
+                    top: `${hoveredHistoryRect.top - 12}px`,
+                    transform: "translate(-50%, -100%)",
+                  }}
+                >
+                  {/* Microtry-on simulation stage */}
+                  <div className="relative w-[110px] h-[135px] bg-[#070707] rounded-xl overflow-hidden border border-white/5 flex-shrink-0">
+                    {/* Model display */}
+                    {(() => {
+                      const itemModel = PRESET_MODELS.find((m) => m.id === hoveredHistoryItem.modelId);
+                      const itemScale = getSizeScale(hoveredHistoryItem.size);
+                      const topGarment = hoveredHistoryItem.topId
+                        ? GARMENTS.find((g) => g.id === hoveredHistoryItem.topId)
+                        : null;
+                      const bottomGarment = hoveredHistoryItem.bottomId
+                        ? GARMENTS.find((g) => g.id === hoveredHistoryItem.bottomId)
+                        : null;
+
+                      return (
+                        <>
+                          {itemModel ? (
+                            <img
+                              src={itemModel.photoUrl}
+                              alt=""
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            /* Custom model / Selfie mockup background */
+                            <div className="w-full h-full flex flex-col items-center justify-center bg-purple-950/20 text-slate-500 p-2 text-center">
+                              {customModelImage ? (
+                                <img
+                                  src={customModelImage}
+                                  alt=""
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <span className="text-[9px] font-mono leading-none text-slate-600">No Image</span>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Micro layout lighting env indicator layer */}
+                          <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-transparent to-slate-950/20 pointer-events-none" />
+
+                          {/* Overlaid Bottom Garment */}
+                          {bottomGarment && (
+                            <div
+                              className="absolute z-10"
+                              style={
+                                itemModel
+                                  ? {
+                                      left: `${itemModel.bottomAnchor.x}%`,
+                                      top: `${itemModel.bottomAnchor.y}%`,
+                                      width: `${itemModel.bottomAnchor.width}%`,
+                                      height: `${itemModel.bottomAnchor.height}%`,
+                                      transform: `scale(${itemScale})`,
+                                      transformOrigin: "center top",
+                                    }
+                                  : {
+                                      left: `${customBottomX}%`,
+                                      top: `${customBottomY}%`,
+                                      width: `${customBottomWidth}%`,
+                                      height: `${customBottomHeight}%`,
+                                      transform: `scale(${itemScale})`,
+                                      transformOrigin: "center top",
+                                    }
+                              }
+                            >
+                              <GarmentSvg
+                                type="bottom"
+                                svgType={bottomGarment.svgType}
+                                colorHex={hoveredHistoryItem.bottomColorHex || bottomGarment.defaultColorHex}
+                                fitting={hoveredHistoryItem.fitting}
+                                material={hoveredHistoryItem.material || "cotton"}
+                                modelId={hoveredHistoryItem.modelId}
+                                className="w-full h-full"
+                              />
+                            </div>
+                          )}
+
+                          {/* Overlaid Top Garment */}
+                          {topGarment && (
+                            <div
+                              className="absolute z-15"
+                              style={
+                                itemModel
+                                  ? {
+                                      left: `${itemModel.topAnchor.x}%`,
+                                      top: `${itemModel.topAnchor.y}%`,
+                                      width: `${itemModel.topAnchor.width}%`,
+                                      height: `${itemModel.topAnchor.height}%`,
+                                      transform: `scale(${itemScale})`,
+                                      transformOrigin: "center top",
+                                    }
+                                  : {
+                                      left: `${customTopX}%`,
+                                      top: `${customTopY}%`,
+                                      width: `${customTopWidth}%`,
+                                      height: `${customTopHeight}%`,
+                                      transform: `scale(${itemScale})`,
+                                      transformOrigin: "center top",
+                                    }
+                              }
+                            >
+                              <GarmentSvg
+                                type="top"
+                                svgType={topGarment.svgType}
+                                colorHex={hoveredHistoryItem.topColorHex || topGarment.defaultColorHex}
+                                fitting={hoveredHistoryItem.fitting}
+                                material={hoveredHistoryItem.material || "cotton"}
+                                modelId={hoveredHistoryItem.modelId}
+                                className="w-full h-full"
+                              />
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Metadata description box */}
+                  <div className="flex flex-col justify-between font-sans min-w-[130px] text-left">
+                    <div className="space-y-1">
+                      <span className="text-[8px] px-1.5 py-0.5 bg-purple-500/10 border border-purple-500/20 rounded-full text-purple-300 font-bold uppercase tracking-widest leading-none block w-max">
+                        Look Preview
+                      </span>
+                      <div className="text-[11px] font-bold text-white truncate max-w-[140px]">
+                        {hoveredHistoryItem.topId ? GARMENTS.find((g) => g.id === hoveredHistoryItem.topId)?.name : "Bare Top"}
+                      </div>
+                      <div className="text-[10px] text-slate-400 truncate max-w-[140px]">
+                        paired with {hoveredHistoryItem.bottomId ? GARMENTS.find((g) => g.id === hoveredHistoryItem.bottomId)?.name.split(" ")[1] : "Bare Bottom"}
+                      </div>
+                    </div>
+
+                    <div className="border-t border-white/5 pt-1.5 mt-1.5 space-y-1 text-[9px] font-mono text-slate-400">
+                      <div className="flex justify-between gap-4">
+                        <span className="text-slate-500">Fitting:</span>
+                        <span className="text-purple-300 capitalize font-bold">{hoveredHistoryItem.fitting}</span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-slate-500">Size / Env:</span>
+                        <span className="text-slate-300 font-bold">{hoveredHistoryItem.size} · <span className="capitalize">{hoveredHistoryItem.lighting}</span></span>
+                      </div>
+                      <div className="flex justify-between gap-4">
+                        <span className="text-slate-500">Saved At:</span>
+                        <span className="text-slate-400">{hoveredHistoryItem.savedAt}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tooltip caret triangle */}
+                  <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-[0.5px] border-4 border-transparent border-t-[#0B0D13]/95" />
                 </div>
               )}
             </div>
@@ -1779,17 +2582,29 @@ export default function App() {
                         : "border-white/5 hover:border-white/10"
                     }`}
                   >
-                    <div className="flex items-center justify-between pointer-events-none">
-                      <span className="text-[9px] font-mono text-[#A855F7] uppercase font-bold tracking-widest">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-mono text-[#A855F7] uppercase font-bold tracking-widest pointer-events-none">
                         ● COMBINED LOOK
                       </span>
-                      <button
-                        onClick={(e) => removeComparedOutfit(outfit.id, e)}
-                        className="pointer-events-auto p-1.5 hover:bg-white/5 text-slate-500 hover:text-red-400 rounded-lg transition-colors"
-                        title="Delete entry"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSharingOutfit(outfit);
+                          }}
+                          className="p-1.5 hover:bg-white/5 text-slate-400 hover:text-[#A855F7] rounded-lg transition-colors"
+                          title="Share outfit / export"
+                        >
+                          <Share2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={(e) => removeComparedOutfit(outfit.id, e)}
+                          className="p-1.5 hover:bg-white/5 text-slate-500 hover:text-red-400 rounded-lg transition-colors"
+                          title="Delete entry"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     {/* Vector outline display micro-canvas preview */}
@@ -1995,6 +2810,150 @@ export default function App() {
                   >
                     Apply & return to Arena
                   </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- PREMIUM SHARE OUTFIT DYNAMIC MODAL --- */}
+      {sharingOutfit && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 animate-fade-in font-sans">
+          <div className="bg-[#0C0B10] border border-white/10 rounded-[32px] w-full max-w-2xl overflow-hidden shadow-2xl relative block">
+            {/* Top header neon glow strip */}
+            <div className="h-1.5 w-full bg-gradient-to-r from-purple-600 via-pink-500 to-amber-500" />
+            
+            {/* Close button icon */}
+            <button
+              onClick={() => setSharingOutfit(null)}
+              className="absolute top-5 right-5 text-slate-400 hover:text-white bg-white/5 hover:bg-white/10 p-2 rounded-full transition border border-white/5"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="p-6 md:p-8 space-y-6">
+              <div className="space-y-1.5">
+                <span className="text-[9px] px-2.5 py-0.5 bg-purple-500/10 border border-purple-500/20 text-[#A855F7] font-mono rounded-full uppercase tracking-wider">
+                  VYBES Share Services
+                </span>
+                <h3 className="text-xl font-extrabold text-slate-100 tracking-wide">
+                  Share Your Customized Vibe
+                </h3>
+                <p className="text-xs text-slate-400 font-light">
+                  Instantly distribute a high-fidelity direct link of your outfit composition, or download a dynamic Vector postcard of your custom design.
+                </p>
+              </div>
+
+              {/* Share layout split */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Visual preview column */}
+                <div className="bg-[#050508] border border-white/5 rounded-2xl p-4 flex flex-col justify-between gap-4">
+                  <div>
+                    <h4 className="text-[10px] uppercase font-mono font-bold tracking-wider text-slate-500 mb-2">Postcard Draft Preview</h4>
+                    <div className="aspect-[4/5] bg-black/50 border border-white/5 rounded-xl flex items-center justify-center p-4 relative overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-t from-purple-950/20 via-transparent to-transparent opacity-60" />
+                      
+                      {/* Top & Bottom Garments */}
+                      {(() => {
+                        const matchingTop = GARMENTS.find((g) => g.id === sharingOutfit.topId);
+                        const matchingBottom = GARMENTS.find((g) => g.id === sharingOutfit.bottomId);
+                        return (
+                          <div className="relative w-36 h-44 flex flex-col items-center justify-center">
+                            {matchingTop && (
+                              <div className="absolute top-2 w-24 h-24 z-10">
+                                <GarmentSvg
+                                  type="top"
+                                  svgType={matchingTop.svgType}
+                                  colorHex={sharingOutfit.topColorHex}
+                                  fitting={sharingOutfit.fitting}
+                                  material={sharingOutfit.material || "cotton"}
+                                  modelId={sharingOutfit.modelId}
+                                />
+                              </div>
+                            )}
+                            {matchingBottom && (
+                              <div className="absolute bottom-1 w-24 h-24 z-0">
+                                <GarmentSvg
+                                  type="bottom"
+                                  svgType={matchingBottom.svgType}
+                                  colorHex={sharingOutfit.bottomColorHex}
+                                  fitting={sharingOutfit.fitting}
+                                  material={sharingOutfit.material || "cotton"}
+                                  modelId={sharingOutfit.modelId}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div className="text-center font-sans">
+                    <p className="text-[11px] font-semibold text-slate-200">{sharingOutfit.name}</p>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Model: {sharingOutfit.modelName} ({sharingOutfit.size})</p>
+                  </div>
+                </div>
+
+                {/* Actions column */}
+                <div className="flex flex-col justify-between gap-6">
+                  <div className="space-y-4 font-sans">
+                    {/* Deep Link URL input */}
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-mono text-slate-400 font-bold uppercase tracking-wide">Deep-Link Studio URL</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          readOnly
+                          value={generateShareLink(sharingOutfit)}
+                          className="flex-1 bg-black border border-white/10 text-slate-300 text-xs rounded-xl p-2.5 focus:outline-none focus:border-[#7C3AED] select-all cursor-text font-mono truncate"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => copyShareLinkToClipboard(sharingOutfit)}
+                          className={`px-3.5 rounded-xl border flex items-center justify-center transition ${
+                            copiedLink
+                              ? "bg-emerald-950/40 border-emerald-500/40 text-emerald-400 animate-scale-up"
+                              : "bg-white/5 border-white/10 hover:bg-white/10 text-slate-300 hover:text-white"
+                          }`}
+                        >
+                          {copiedLink ? <Check className="w-4 h-4" /> : <Link2 className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Quick description */}
+                    <p className="text-[11px] text-slate-400 leading-relaxed font-light">
+                      This link registers all current garments, colors, fit preferences, and lighting modes within a base64 configuration payload. 
+                    </p>
+                  </div>
+
+                  {/* Operational sharing targets */}
+                  <div className="space-y-2 font-sans">
+                    <button
+                      type="button"
+                      onClick={() => copyShareLinkToClipboard(sharingOutfit)}
+                      className="w-full py-3 px-4 bg-gradient-to-r from-purple-600 to-[#7C3AED] hover:from-purple-500 hover:to-[#A855F7] text-white font-bold text-xs rounded-xl transition uppercase tracking-wider flex items-center justify-center gap-2"
+                    >
+                      {copiedLink ? (
+                        <>
+                          <Check className="w-4 h-4" /> Dynamic URL Copied!
+                        </>
+                      ) : (
+                        <>
+                          <Link2 className="w-4 h-4" /> Copy Deep-Link URL
+                        </>
+                      )}
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => downloadOutfitDesignPostcard(sharingOutfit)}
+                      className="w-full py-3 px-4 bg-[#0D0D0F] border border-white/10 hover:border-white/20 text-slate-200 hover:text-white font-bold text-xs rounded-xl transition uppercase tracking-wider flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4 text-purple-400" /> Export Vector Postcard (.svg)
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
