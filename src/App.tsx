@@ -65,6 +65,7 @@ export default function App() {
   const [fitting, setFitting] = useState<FittingType>("regular");
   const [size, setSize] = useState<ClothingSize>("M");
   const [lighting, setLighting] = useState<LightingMode>("daylight");
+  const [material, setMaterial] = useState<"cotton" | "silk" | "wool">("cotton");
 
   // Custom User Photo / Webcam upload
   const [customModelImage, setCustomModelImage] = useState<string | null>(null);
@@ -226,7 +227,7 @@ export default function App() {
       );
       return [newHistoryItem, ...filtered].slice(0, 5);
     });
-  }, [currentTop, currentTopColor, currentBottom, currentBottomColor, selectedModelId, fitting, size, lighting]);
+  }, [currentTop, currentTopColor, currentBottom, currentBottomColor, selectedModelId, fitting, size, lighting, material]);
 
   // Show a temporary toast helper
   const showToast = (message: string) => {
@@ -457,6 +458,7 @@ export default function App() {
       lighting,
       size,
       fitting,
+      material,
       customImageUrl: selectedModelId === "custom" ? customModelImage || undefined : undefined,
       savedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
@@ -492,6 +494,9 @@ export default function App() {
     setLighting(outfit.lighting);
     setSize(outfit.size);
     setFitting(outfit.fitting);
+    if (outfit.material) {
+      setMaterial(outfit.material);
+    }
     showToast(`Loaded "${outfit.name}" back onto dynamic fit stage!`);
   };
 
@@ -763,6 +768,7 @@ export default function App() {
                               svgType={currentBottom.svgType}
                               colorHex={currentBottomColor?.hex || currentBottom.defaultColorHex}
                               fitting={fitting}
+                              material={material}
                               modelId={selectedModelId}
                               className="w-full h-full"
                             />
@@ -788,6 +794,7 @@ export default function App() {
                               svgType={currentTop.svgType}
                               colorHex={currentTopColor?.hex || currentTop.defaultColorHex}
                               fitting={fitting}
+                              material={material}
                               modelId={selectedModelId}
                               className="w-full h-full"
                             />
@@ -819,6 +826,7 @@ export default function App() {
                             svgType={currentBottom.svgType}
                             colorHex={currentBottomColor?.hex || currentBottom.defaultColorHex}
                             fitting={fitting}
+                            material={material}
                             modelId={selectedModelId}
                             className="w-full h-full"
                           />
@@ -844,6 +852,7 @@ export default function App() {
                             svgType={currentTop.svgType}
                             colorHex={currentTopColor?.hex || currentTop.defaultColorHex}
                             fitting={fitting}
+                            material={material}
                             modelId={selectedModelId}
                             className="w-full h-full"
                           />
@@ -1417,6 +1426,35 @@ export default function App() {
                   </select>
                 </div>
               </div>
+
+              {/* FABRIC MATERIAL SELECTOR */}
+              <div className="flex flex-col gap-2 pt-3 border-t border-white/5">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-[10px] uppercase tracking-wider text-slate-400">Fabric Material</span>
+                  <span className="text-[10px] text-purple-400 font-medium font-mono">
+                    {material === "cotton" ? "Soft Canvas Matte" : material === "silk" ? "Highly Lustrous Silk" : "Heavy Textured Wool"}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(["cotton", "silk", "wool"] as const).map((m) => {
+                    const isSelected = material === m;
+                    return (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setMaterial(m)}
+                        className={`py-2 px-1 rounded-xl border text-[10px] font-bold uppercase tracking-wider text-center transition-all duration-200 ${
+                          isSelected
+                            ? "bg-[#7C3AED]/20 border-[#7C3AED] text-slate-100 shadow-[0_0_8px_rgba(124,58,237,0.15)]"
+                            : "bg-[#0A0A0A] border-white/5 text-slate-400 hover:border-white/10 hover:text-slate-200"
+                        }`}
+                      >
+                        {m}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
             {/* ASSESSMENT REPORT GENERATOR BUTTON */}
@@ -1766,6 +1804,7 @@ export default function App() {
                             svgType={matchingTopObj.svgType}
                             colorHex={outfit.topColorHex}
                             fitting={outfit.fitting}
+                            material={outfit.material || "cotton"}
                             modelId={outfit.modelId}
                           />
                         </div>
@@ -1779,6 +1818,7 @@ export default function App() {
                             svgType={matchingBottomObj.svgType}
                             colorHex={outfit.bottomColorHex}
                             fitting={outfit.fitting}
+                            material={outfit.material || "cotton"}
                             modelId={outfit.modelId}
                           />
                         </div>

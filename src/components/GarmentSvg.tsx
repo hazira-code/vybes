@@ -17,6 +17,7 @@ interface GarmentSvgProps {
     | "pleated_pants";
   colorHex: string;
   fitting: FittingType;
+  material?: "cotton" | "silk" | "wool";
   modelId?: string; // Links dynamic contouring to the model
   maskId?: string; // Optional dynamic silhouette mask ID received from parent
   className?: string;
@@ -291,6 +292,7 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
   svgType,
   colorHex,
   fitting,
+  material,
   modelId,
   maskId,
   className = "",
@@ -340,10 +342,55 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
   const grainFilterId = `grain-filter-${type}-${svgType}`;
 
   // Fabric texture simulation parameters based on FittingType density scales to simulate cotton, silk, or wool:
-  // - slim (tighter/dense finer scale, like silk/jersey knit) -> baseFrequency: 0.90
-  // - regular (normal scale, like standard canvas/cotton) -> baseFrequency: 0.60
-  // - loose (coarser scale/looser weave, like wool/linen flocking) -> baseFrequency: 0.32
-  const grainFreq = fitting === "slim" ? "0.90" : fitting === "loose" ? "0.32" : "0.60";
+  const materialKey = material || "cotton";
+  let grainFreq = "0.55";
+  let grainOpacity = 0.45;
+  let mixBlendMode: React.CSSProperties["mixBlendMode"] = "overlay";
+  let contrastAdjust = "0.15"; // Alpha in feColorMatrix to tweak density/contrast
+
+  if (materialKey === "silk") {
+    // Silk has highly dense, microscopic fine details (high frequency) and very clean, smooth sheen
+    contrastAdjust = "0.08";
+    if (fitting === "slim") {
+      grainFreq = "1.35";
+      grainOpacity = 0.18;
+    } else if (fitting === "loose") {
+      grainFreq = "0.85";
+      grainOpacity = 0.28;
+    } else { // regular
+      grainFreq = "1.05";
+      grainOpacity = 0.22;
+    }
+    mixBlendMode = "overlay";
+  } else if (materialKey === "wool") {
+    // Wool has coarser, porous, highly textured interlocking threads (lower frequency) and rougher density
+    contrastAdjust = "0.24";
+    if (fitting === "slim") {
+      grainFreq = "0.36";
+      grainOpacity = 0.52;
+    } else if (fitting === "loose") {
+      grainFreq = "0.16";
+      grainOpacity = 0.65;
+    } else { // regular
+      grainFreq = "0.24";
+      grainOpacity = 0.58;
+    }
+    mixBlendMode = "multiply";
+  } else {
+    // Cotton (regular/default canvas weave)
+    contrastAdjust = "0.15";
+    if (fitting === "slim") {
+      grainFreq = "0.78";
+      grainOpacity = 0.38;
+    } else if (fitting === "loose") {
+      grainFreq = "0.42";
+      grainOpacity = 0.48;
+    } else { // regular
+      grainFreq = "0.58";
+      grainOpacity = 0.42;
+    }
+    mixBlendMode = "overlay";
+  }
 
   const isPresetModel = !!modelId && modelId !== "custom";
   const modelKey = modelId && MODEL_SILHOUETTES[modelId] ? modelId : "model-sophia";
@@ -525,12 +572,24 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
             />
             <feColorMatrix
               type="matrix"
-              values="1 0 0 0 0
-                      0 1 0 0 0
-                      0 0 1 0 0
-                      0 0 0 0.14 0"
+              values={`1 0 0 0 0
+                       0 1 0 0 0
+                       0 0 1 0 0
+                       0 0 0 ${contrastAdjust} 0`}
             />
           </filter>
+
+          {/* Shimmering silk specular gradient to simulate high lustre luxury satin weave */}
+          <linearGradient id="silk-shimmer" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="rgba(255, 255, 255, 0)" />
+            <stop offset="15%" stopColor="rgba(255, 255, 255, 0.03)" />
+            <stop offset="30%" stopColor="rgba(255, 255, 255, 0.26)" />
+            <stop offset="45%" stopColor="rgba(255, 255, 255, 0)" />
+            <stop offset="55%" stopColor="rgba(255, 255, 255, 0)" />
+            <stop offset="70%" stopColor="rgba(255, 255, 255, 0.22)" />
+            <stop offset="85%" stopColor="rgba(255, 255, 255, 0.04)" />
+            <stop offset="100%" stopColor="rgba(255, 255, 255, 0)" />
+          </linearGradient>
 
           {/* Model edge-shading gradient to dynamically blend edges with 3D wrap effects */}
           <linearGradient id="silhouette-mask-gradient" x1="0" y1="0" x2="1" y2="0">
@@ -1030,9 +1089,23 @@ export const GarmentSvg: React.FC<GarmentSvgProps> = ({
           clipPath={`url(#${activeClipPathId})`}
           filter={`url(#${grainFilterId})`}
           fill="white"
-          style={{ mixBlendMode: "overlay" }}
-          className="opacity-45 pointer-events-none"
+          style={{ mixBlendMode, opacity: grainOpacity }}
+          className="pointer-events-none"
         />
+
+        {/* Shimmering satin/silk high gloss highlight layer for realistic lustrous fabric depth */}
+        {materialKey === "silk" && (
+          <rect
+            x="0"
+            y="0"
+            width="100"
+            height={type === "top" ? 110 : 130}
+            clipPath={`url(#${activeClipPathId})`}
+            fill="url(#silk-shimmer)"
+            style={{ mixBlendMode: "screen" }}
+            className="opacity-35 pointer-events-none"
+          />
+        )}
         </g>
 
         {/* --- MODEL-SPECIFIC 3D CONTOUR SHADING OVERLAY MESH --- */}

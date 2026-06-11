@@ -61,6 +61,7 @@ export interface SavedOutfit {
   lighting: LightingMode;
   size: ClothingSize;
   fitting: FittingType;
+  material?: "cotton" | "silk" | "wool";
   customImageUrl?: string;
   grade?: number;
   verdict?: string;
