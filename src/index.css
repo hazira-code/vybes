@@ -1,0 +1,101 @@
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Poppins", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Glassmorphism Styles */
+.glass-panel {
+  background: rgba(20, 20, 20, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08); /* Minimal white border */
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6), inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+.glass-panel-accent {
+  background: rgba(25, 20, 35, 0.7);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(124, 58, 237, 0.2); /* Subtle Deep Violet Border */
+  box-shadow: 0 8px 32px 0 rgba(124, 58, 237, 0.05);
+}
+
+.glass-input {
+  background: rgba(10, 10, 10, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-input:focus {
+  border-color: rgba(124, 58, 237, 0.8);
+  box-shadow: 0 0 15px rgba(124, 58, 237, 0.25);
+  outline: none;
+}
+
+/* AI Futuristic Animations & Glow Effects */
+@keyframes pulseGlow {
+  0%, 100% {
+    text-shadow: 0 0 12px rgba(124, 58, 237, 0.6), 0 0 24px rgba(124, 58, 237, 0.2);
+  }
+  50% {
+    text-shadow: 0 0 18px rgba(168, 85, 247, 0.8), 0 0 36px rgba(168, 85, 247, 0.4);
+  }
+}
+
+.ai-pulse-text {
+  animation: pulseGlow 4s infinite ease-in-out;
+}
+
+@keyframes holographicRadar {
+  0% {
+    transform: scale(0.98);
+    opacity: 0.15;
+  }
+  50% {
+    transform: scale(1.02);
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(0.98);
+    opacity: 0.15;
+  }
+}
+
+.holographic-glow {
+  position: relative;
+}
+
+.holographic-glow::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(135deg, #7C3AED, #A855F7, #7C3AED);
+  border-radius: inherit;
+  z-index: -1;
+  opacity: 0.15;
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 15, 15, 0.5);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(124, 58, 237, 0.3);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(124, 58, 237, 0.6);
+}

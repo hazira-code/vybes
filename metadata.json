@@ -1,0 +1,6 @@
+{
+  "name": "VYBES",
+  "description": "AI-powered Virtual Fashion Experience Platform. Try it virtually, wear it confidently. View outfits under various lighting conditions, compare choices, and get tailored style recommendations.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
